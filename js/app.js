@@ -10,7 +10,55 @@
  */
 
 assertClientKeyIsAnonOnly(SUPABASE_ANON_KEY);
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/**
+ * 인증 식별 방식 (T07-C108): JWT 토큰 기반 (서버 세션 쿠키 방식이 아님)
+ * - 로그인 후 access_token(JWT)을 발급받아 이후 API 요청에
+ *   Authorization: Bearer <access_token> 헤더로 전달 (supabase-js 기본 동작)
+ * - 세션은 localStorage 에 보관. 주소창 쿼리/해시로 토큰을 실어 다니지 않음 (T07-C112)
+ * - JWT Secret / service_role 은 서버(Supabase)에만 존재. 클라이언트에 두지 않음 (T07-C113)
+ */
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: window.localStorage,
+    storageKey: "pds-auth-token",
+  },
+});
+window.supabaseClient = supabase;
+
+/** 혹시 남은 access_token 등이 URL 에 있으면 제거하고 앱 라우트(#/…)만 유지 */
+function stripAuthTokensFromUrl() {
+  try {
+    const url = new URL(window.location.href);
+    const sensitiveKeys = ["access_token", "refresh_token", "token", "id_token", "provider_token"];
+    let changed = false;
+    sensitiveKeys.forEach((key) => {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key);
+        changed = true;
+      }
+    });
+
+    const hash = url.hash || "";
+    const isAppRoute = hash.startsWith("#/");
+    if (!isAppRoute && /(access_token|refresh_token|id_token)=/.test(hash)) {
+      url.hash = "";
+      changed = true;
+    }
+
+    if (changed) {
+      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+stripAuthTokensFromUrl();
+window.stripAuthTokensFromUrl = stripAuthTokensFromUrl;
 
 const PRIORITY_LABEL = { 1: "높음", 2: "중간", 3: "낮음" };
 const STORAGE_SELECTED_PLAN = "pds_selected_plan_id";
@@ -123,6 +171,39 @@ const todoEvidenceBanner = document.getElementById("todo-evidence-banner");
 const metricCards = document.querySelectorAll(".metric-card");
 const exportAllBtn = document.getElementById("export-all-btn");
 const exportStatus = document.getElementById("export-status");
+const deleteAccountBtn = document.getElementById("delete-account-btn");
+const deleteAccountStatus = document.getElementById("delete-account-status");
+const migrateLegacyBtn = document.getElementById("migrate-legacy-btn");
+const migrateStatus = document.getElementById("migrate-status");
+
+const ACCOUNT_DELETE_WARNING = "내 계정을 지우면 내 자료도 함께 지워지거나, 지워진다!";
+
+let diaryStarted = false;
+
+async function requireUserId() {
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+  if (error || !user) throw new Error("로그인이 필요합니다.");
+  return user.id;
+}
+
+/**
+ * RLS 보완 (T07-C123, C125):
+ * - 목록은 JWT+RLS 로만 걸러짐. URL/헤더에 남의 user_id 를 넣어도 서버가 내 행만 반환
+ * - 클라이언트가 보낸 user_id 는 버리고, 세션의 auth.getUser().id 만 사용
+ */
+function stripClientUserId(payload) {
+  if (!payload || typeof payload !== "object") return {};
+  const { user_id: _ignored, ...rest } = payload;
+  return rest;
+}
+
+async function withSessionOwner(payload) {
+  const userId = await requireUserId();
+  return { ...stripClientUserId(payload), user_id: userId };
+}
 
 const FIELD_IDS = ["title", "period", "priority", "success_criteria", "estimated_hours"];
 const TODO_FIELD_IDS = [
@@ -421,7 +502,8 @@ async function loadPlans({ restoreSelection = true } = {}) {
 }
 
 async function createPlan(values) {
-  const { error } = await supabase.from("T6").insert([values]);
+  const row = await withSessionOwner(values);
+  const { error } = await supabase.from("T6").insert([row]);
   if (error) throw error;
 }
 
@@ -444,7 +526,9 @@ async function updatePlanWithHistory(planId, values) {
 
   if (historyError) throw historyError;
 
-  const { error: updateError } = await supabase.from("T6").update(values).eq("id", planId);
+  // user_id 는 업데이트 대상에서 제외 (소유권 조작 방지 — RLS+트리거가 최종 방어)
+  const patch = stripClientUserId(values);
+  const { error: updateError } = await supabase.from("T6").update(patch).eq("id", planId);
   if (updateError) throw updateError;
 }
 
@@ -992,7 +1076,9 @@ function openExecutionDialog(todo) {
 }
 
 /**
- * T6 + T6_todos + T6_execution_records 전체 JSON 내보내기
+ * 내 자료 전체 내보내기 (T07-C133)
+ * - RLS 때문에 auth.uid() 소유 행만 select 됨
+ * - T6 + T6_todos + T6_execution_records 를 한 JSON 으로 병합 다운로드
  */
 async function exportAllPdsData() {
   if (!isConfigured()) {
@@ -1000,9 +1086,11 @@ async function exportAllPdsData() {
     return;
   }
 
-  setStatus(exportStatus, "데이터 수집 중…");
+  setStatus(exportStatus, "내 자료 수집 중…");
 
   try {
+    const userId = await requireUserId();
+
     const [plansRes, todosRes, execRes] = await Promise.all([
       supabase.from("T6").select("*").order("created_at", { ascending: true }),
       supabase.from("T6_todos").select("*").order("created_at", { ascending: true }),
@@ -1015,6 +1103,8 @@ async function exportAllPdsData() {
 
     const payload = {
       exported_at: new Date().toISOString(),
+      owner_user_id: userId,
+      note: "RLS 적용 — 현재 로그인 사용자 소유 데이터만 포함",
       timezone_note: "timestamptz stored as UTC; delay rules use Asia/Seoul (KST)",
       T6: plansRes.data || [],
       T6_todos: todosRes.data || [],
@@ -1045,19 +1135,79 @@ async function exportAllPdsData() {
 }
 
 /**
+ * 계정 삭제(탈퇴) (T07-C134)
+ * - confirm 으로 경고 문구 필수 노출
+ * - RPC delete_own_account 로 자료+auth 사용자 삭제 후 로그아웃·로그인 화면
+ */
+async function deleteOwnAccount() {
+  const confirmed = window.confirm(ACCOUNT_DELETE_WARNING);
+  if (!confirmed) {
+    setStatus(deleteAccountStatus, "계정 삭제를 취소했습니다.");
+    return;
+  }
+
+  // 이중 확인 (실수 클릭 방지)
+  const confirmedAgain = window.confirm(
+    `${ACCOUNT_DELETE_WARNING}\n\n정말 삭제할까요? 이 작업은 되돌릴 수 없습니다.`
+  );
+  if (!confirmedAgain) {
+    setStatus(deleteAccountStatus, "계정 삭제를 취소했습니다.");
+    return;
+  }
+
+  setStatus(deleteAccountStatus, "계정 삭제 중…");
+  deleteAccountBtn.disabled = true;
+
+  try {
+    await requireUserId();
+
+    const { error: rpcError } = await supabase.rpc("delete_own_account");
+    if (rpcError) {
+      // RPC 미설치 시에도 로그아웃은 진행 (자료는 서버에 남을 수 있음 — SQL 실행 안내)
+      console.error("[delete_own_account]", rpcError.name, rpcError.code || "");
+      setStatus(
+        deleteAccountStatus,
+        "계정 삭제 RPC 실패. sql/delete_own_account.sql 실행 여부를 확인하세요. 로그아웃은 진행합니다.",
+        "is-error"
+      );
+    } else {
+      setStatus(deleteAccountStatus, "계정이 삭제되었습니다.", "is-ok");
+    }
+
+    await supabase.auth.signOut();
+    if (typeof window.stopDiaryApp === "function") window.stopDiaryApp();
+
+    // 로그인 화면으로
+    location.hash = "#/login";
+  } catch (err) {
+    console.error("[delete_account]", err?.name || "Error");
+    setStatus(deleteAccountStatus, `계정 삭제 실패: ${err.message || err}`, "is-error");
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      /* ignore */
+    }
+    location.hash = "#/login";
+  } finally {
+    deleteAccountBtn.disabled = false;
+  }
+}
+
+/**
  * 실행 기록 저장: upsert(onConflict: todo_id)
  * - DB UNIQUE(todo_id)가 중복을 차단
  * - 연타 시에도 한 건만 유지 (프론트 disabled에 의존하지 않음)
  * - T6 / T6_todos 는 절대 update 하지 않음
  */
 async function saveExecutionRecord(payload) {
-  const { error } = await supabase.from("T6_execution_records").upsert(payload, {
+  const row = await withSessionOwner(payload);
+  const { error } = await supabase.from("T6_execution_records").upsert(row, {
     onConflict: "todo_id",
   });
 
   if (!error) return;
 
-  // UNIQUE 충돌 등: 기존 행을 update 로 한 건 유지
+  // UNIQUE 충돌 등: 기존 행을 update 로 한 건 유지 (user_id 변경 없음)
   const isConflict =
     error.code === "23505" ||
     /duplicate|unique/i.test(error.message || "");
@@ -1067,12 +1217,12 @@ async function saveExecutionRecord(payload) {
   const { error: updateError } = await supabase
     .from("T6_execution_records")
     .update({
-      start_time: payload.start_time,
-      end_time: payload.end_time,
-      actual_duration: payload.actual_duration,
-      blocker_reason: payload.blocker_reason,
+      start_time: row.start_time,
+      end_time: row.end_time,
+      actual_duration: row.actual_duration,
+      blocker_reason: row.blocker_reason,
     })
-    .eq("todo_id", payload.todo_id);
+    .eq("todo_id", row.todo_id);
 
   if (updateError) throw updateError;
 }
@@ -1110,23 +1260,24 @@ todoForm.addEventListener("submit", async (event) => {
     if (editingId) {
       const { error } = await supabase
         .from("T6_todos")
-        .update({
-          content: values.content,
-          deadline: values.deadline,
-          priority: values.priority,
-          tags: values.tags,
-          estimated_time: values.estimated_time,
-        })
+        .update(
+          stripClientUserId({
+            content: values.content,
+            deadline: values.deadline,
+            priority: values.priority,
+            tags: values.tags,
+            estimated_time: values.estimated_time,
+          })
+        )
         .eq("id", editingId);
       if (error) throw error;
       setStatus(todoFormStatus, "할 일이 수정되었습니다.", "is-ok");
     } else {
-      const { error } = await supabase.from("T6_todos").insert([
-        {
-          ...values,
-          is_completed: false,
-        },
-      ]);
+      const row = await withSessionOwner({
+        ...values,
+        is_completed: false,
+      });
+      const { error } = await supabase.from("T6_todos").insert([row]);
       if (error) throw error;
       setStatus(todoFormStatus, "할 일이 추가되었습니다.", "is-ok");
     }
@@ -1297,7 +1448,69 @@ todoList.addEventListener("change", async (event) => {
 });
 
 exportAllBtn.addEventListener("click", () => exportAllPdsData());
+deleteAccountBtn?.addEventListener("click", () => deleteOwnAccount());
+
+/**
+ * 1회성: user_id 가 null 인 기존 자료를 현재 로그인 사용자 소유로 이전
+ * (RPC: public.claim_legacy_pds_data — sql/auth_user_id_rls.sql)
+ */
+async function migrateLegacyDataToCurrentUser() {
+  await requireUserId();
+  setStatus(migrateStatus, "이전 중…");
+
+  const { data, error } = await supabase.rpc("claim_legacy_pds_data");
+  if (error) throw error;
+
+  const p = data?.plans ?? 0;
+  const t = data?.todos ?? 0;
+  const e = data?.execution_records ?? 0;
+
+  setStatus(
+    migrateStatus,
+    `이전 완료 — 계획 ${p}건 · 할 일 ${t}건 · 실행 기록 ${e}건 (이미 소유된 행은 제외)`,
+    "is-ok"
+  );
+  await loadPlans({ restoreSelection: true });
+  return data;
+}
+
+migrateLegacyBtn?.addEventListener("click", async () => {
+  const ok = window.confirm(
+    "user_id 가 비어 있는 기존 자료를 지금 로그인한 계정 소유로 옮길까요? (1회성)"
+  );
+  if (!ok) return;
+  migrateLegacyBtn.disabled = true;
+  try {
+    await migrateLegacyDataToCurrentUser();
+  } catch (err) {
+    console.error(err);
+    setStatus(migrateStatus, `이전 실패: ${err.message || err}`, "is-error");
+  } finally {
+    migrateLegacyBtn.disabled = false;
+  }
+});
 
 setTodoControlsEnabled(false);
-// 초기·새로고침: 항상 Supabase 에서 최신 데이터 fetch 후 렌더
-loadPlans({ restoreSelection: true });
+
+/** auth.js 에서 로그인 성공 후 호출 — DB fetch 로 다이어리 시작 */
+window.startDiaryApp = async function startDiaryApp() {
+  if (!isConfigured()) {
+    setStatus(listStatus, "js/config.js 설정을 확인해 주세요.", "is-error");
+    return;
+  }
+  diaryStarted = true;
+  await loadPlans({ restoreSelection: true });
+};
+
+window.stopDiaryApp = function stopDiaryApp() {
+  diaryStarted = false;
+  selectedPlan = null;
+  todosCache = [];
+  executionByTodoId = new Map();
+  sessionStorage.removeItem(STORAGE_SELECTED_PLAN);
+  if (planList) clearNode(planList);
+  if (todoList) clearNode(todoList);
+  setTodoControlsEnabled(false);
+};
+
+window.migrateLegacyDataToCurrentUser = migrateLegacyDataToCurrentUser;
