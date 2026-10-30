@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>플랜두씨 다이어리 1</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="site-header">
+        <p class="brand">플랜두씨 다이어리 1</p>
+        <p class="tagline">Plan · Do · See — 계획을 세우고, 고친 흔적까지 남깁니다.</p>
+      </header>
+
+      <aside class="notice" role="status">
+        아직 로그인이 없어 누구나 볼 수 있는 공개 다이어리입니다.
+      </aside>
+      <aside class="notice notice-warn" role="alert">
+        지금은 로그인이 없어 링크를 아는 사람은 누구나 볼 수 있습니다. 남이 봐도 괜찮은 내용만 넣으세요
+      </aside>
+
+      <main class="layout">
+        <section class="panel" aria-labelledby="plan-form-title">
+          <h2 id="plan-form-title" class="panel-title">계획 세우기 (Plan)</h2>
+          <form id="plan-form" class="plan-form" novalidate>
+            <input type="hidden" id="editing-id" value="" />
+
+            <label class="field">
+              <span>계획명</span>
+              <input
+                type="text"
+                id="title"
+                name="title"
+                required
+                maxlength="120"
+                placeholder="예: 포트폴리오 사이트 완성"
+              />
+            </label>
+
+            <div class="field-row">
+              <label class="field">
+                <span>기간</span>
+                <input
+                  type="text"
+                  id="period"
+                  name="period"
+                  required
+                  maxlength="40"
+                  placeholder="예: 2026-10 ~ 2026-12"
+                />
+              </label>
+
+              <label class="field">
+                <span>우선순위</span>
+                <select id="priority" name="priority" required>
+                  <option value="높음">높음</option>
+                  <option value="중간" selected>중간</option>
+                  <option value="낮음">낮음</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="field">
+              <span>성공 기준</span>
+              <textarea
+                id="success_criteria"
+                name="success_criteria"
+                required
+                rows="3"
+                maxlength="500"
+                placeholder="어떤 상태가 되면 성공인가요?"
+              ></textarea>
+            </label>
+
+            <label class="field">
+              <span>예상 시간 (시간)</span>
+              <input
+                type="number"
+                id="estimated_hours"
+                name="estimated_hours"
+                required
+                min="0"
+                step="0.5"
+                placeholder="예: 20"
+              />
+            </label>
+
+            <div class="form-actions">
+              <button type="submit" id="submit-btn" class="btn btn-primary">계획 저장</button>
+              <button type="button" id="cancel-edit-btn" class="btn btn-ghost hidden">
+                수정 취소
+              </button>
+            </div>
+            <p id="form-status" class="status-msg" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section class="panel" aria-labelledby="plan-list-title">
+          <div class="panel-heading">
+            <h2 id="plan-list-title" class="panel-title">저장된 계획</h2>
+            <button type="button" id="refresh-btn" class="btn btn-ghost">새로고침</button>
+          </div>
+          <p id="list-status" class="status-msg" aria-live="polite"></p>
+          <ul id="plan-list" class="plan-list"></ul>
+        </section>
+      </main>
+
+      <!-- 카드 2: 할 일 다루기 (선택한 T6에 종속) -->
+      <section id="todo-section" class="panel todo-section" aria-labelledby="todo-section-title">
+        <div class="panel-heading">
+          <h2 id="todo-section-title" class="panel-title">할 일 다루기 (Do)</h2>
+          <button type="button" id="todo-refresh-btn" class="btn btn-ghost" disabled>새로고침</button>
+        </div>
+
+        <p id="selected-plan-label" class="selected-plan-label">
+          위에서 계획의 <strong>할 일</strong> 버튼을 누르면 이 계획에 달린 할 일을 관리합니다.
+        </p>
+
+        <p class="sort-banner" role="note">
+          현재 정렬 기준: 마감일 임박순 ➔ 우선순위 높음순 ➔ 생성일 빠른순
+        </p>
+
+        <div class="todo-toolbar">
+          <label class="field todo-search-field">
+            <span class="visually-hidden">검색</span>
+            <input
+              type="search"
+              id="todo-search"
+              placeholder="할 일 내용 또는 태그 검색"
+              disabled
+            />
+          </label>
+          <div class="filter-tabs" role="tablist" aria-label="완료 상태 필터">
+            <button type="button" class="filter-tab is-active" data-filter="all" disabled>전체</button>
+            <button type="button" class="filter-tab" data-filter="active" disabled>진행 중</button>
+            <button type="button" class="filter-tab" data-filter="done" disabled>완료</button>
+          </div>
+        </div>
+
+        <form id="todo-form" class="plan-form todo-form" novalidate>
+          <input type="hidden" id="todo-editing-id" value="" />
+          <input type="hidden" id="todo-plan-id" value="" />
+
+          <label class="field">
+            <span>할 일 내용</span>
+            <input
+              type="text"
+              id="todo-content"
+              name="content"
+              required
+              maxlength="200"
+              placeholder="예: 기출문제 1회분 풀기"
+              disabled
+            />
+          </label>
+
+          <div class="field-row field-row-3">
+            <label class="field">
+              <span>마감일</span>
+              <input type="date" id="todo-deadline" name="deadline" required disabled />
+            </label>
+            <label class="field">
+              <span>우선순위</span>
+              <select id="todo-priority" name="priority" required disabled>
+                <option value="1">높음</option>
+                <option value="2" selected>중간</option>
+                <option value="3">낮음</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>예상 시간 (시간)</span>
+              <input
+                type="number"
+                id="todo-estimated-time"
+                name="estimated_time"
+                required
+                min="0"
+                step="0.5"
+                placeholder="예: 2"
+                disabled
+              />
+            </label>
+          </div>
+
+          <label class="field">
+            <span>태그 (쉼표로 구분)</span>
+            <input
+              type="text"
+              id="todo-tags"
+              name="tags"
+              required
+              maxlength="120"
+              placeholder="예: 공부, 필기, 주간"
+              disabled
+            />
+          </label>
+
+          <div class="form-actions">
+            <button type="submit" id="todo-submit-btn" class="btn btn-primary" disabled>
+              할 일 추가
+            </button>
+            <button type="button" id="todo-cancel-edit-btn" class="btn btn-ghost hidden">
+              수정 취소
+            </button>
+          </div>
+          <p id="todo-form-status" class="status-msg" aria-live="polite"></p>
+        </form>
+
+        <p id="todo-list-status" class="status-msg" aria-live="polite"></p>
+        <p id="todo-evidence-banner" class="evidence-banner hidden" aria-live="polite"></p>
+        <ul id="todo-list" class="todo-list"></ul>
+      </section>
+
+      <!-- 카드 4: 돌아보기 (See) -->
+      <section id="see-section" class="panel see-section" aria-labelledby="see-section-title">
+        <div class="panel-heading">
+          <h2 id="see-section-title" class="panel-title">돌아보기 (See)</h2>
+          <button type="button" id="see-refresh-btn" class="btn btn-ghost" disabled>집계 새로고침</button>
+        </div>
+
+        <p id="see-plan-label" class="selected-plan-label">
+          계획을 선택한 뒤, 할 일·실행 기록을 바탕으로 집계가 표시됩니다.
+        </p>
+
+        <p class="sort-banner" role="note">
+          숫자를 클릭하면 아래 할 일 목록에서 해당 조건의 근거 기록만 바로 보여 줍니다. (지연은 KST 기준)
+        </p>
+
+        <div class="see-metrics" role="group" aria-label="계획 실행 집계">
+          <button type="button" class="metric-card" data-see-filter="dash-all" disabled>
+            <span class="metric-label">계획 수</span>
+            <span class="metric-value" id="metric-total">0</span>
+            <span class="metric-hint">전체 할 일</span>
+          </button>
+          <button type="button" class="metric-card" data-see-filter="dash-done" disabled>
+            <span class="metric-label">완료 수</span>
+            <span class="metric-value" id="metric-done">0</span>
+            <span class="metric-hint">is_completed = true</span>
+          </button>
+          <button type="button" class="metric-card" data-see-filter="dash-delayed" disabled>
+            <span class="metric-label">지연 수</span>
+            <span class="metric-value" id="metric-delayed">0</span>
+            <span class="metric-hint">미완료 · 마감 &lt; 오늘(KST)</span>
+          </button>
+          <button type="button" class="metric-card" data-see-filter="dash-blocked" disabled>
+            <span class="metric-label">막힘 수</span>
+            <span class="metric-value" id="metric-blocked">0</span>
+            <span class="metric-hint">blocker_reason 있음</span>
+          </button>
+        </div>
+
+        <div class="see-time-panel">
+          <h3 class="see-subtitle">시간 차이 (단위: 시간)</h3>
+          <dl class="time-diff">
+            <div>
+              <dt>예상 시간 합계</dt>
+              <dd><span id="metric-est-sum">0</span>시간</dd>
+            </div>
+            <div>
+              <dt>실제 시간 합계</dt>
+              <dd><span id="metric-act-sum">0</span>시간</dd>
+            </div>
+            <div>
+              <dt>차이 (실제 − 예상)</dt>
+              <dd><span id="metric-time-diff">0</span>시간</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="see-feedback">
+          <h3 class="see-subtitle">다음 계획에 반영할 고칠 점</h3>
+          <label class="field">
+            <span class="visually-hidden">고칠 점</span>
+            <textarea
+              id="see-feedback-input"
+              rows="3"
+              maxlength="500"
+              placeholder="예: 예상 시간을 더 여유 있게 잡고, 막히는 지점은 먼저 질문하기"
+              disabled
+            ></textarea>
+          </label>
+          <div class="form-actions">
+            <button type="button" id="see-to-plan-btn" class="btn btn-primary" disabled>
+              이 피드백을 안고 새 계획 세우기
+            </button>
+          </div>
+          <p id="see-feedback-status" class="status-msg" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <footer class="export-footer panel">
+        <h2 class="panel-title">내 자료 지키기</h2>
+        <p class="selected-plan-label">
+          Supabase에 저장된 계획·할 일·실행 기록을 한 번에 JSON으로 내려받습니다. (새로고침해도 데이터는 DB에서 다시 불러옵니다)
+        </p>
+        <div class="form-actions">
+          <button type="button" id="export-all-btn" class="btn btn-primary">
+            내 자료 전체 내보내기
+          </button>
+        </div>
+        <p id="export-status" class="status-msg" aria-live="polite"></p>
+      </footer>
+    </div>
+
+    <!-- 수정 이력 모달 -->
+    <dialog id="history-dialog" class="history-dialog">
+      <div class="dialog-inner">
+        <header class="dialog-header">
+          <h2 id="history-title">수정 이력</h2>
+          <button type="button" id="close-history-btn" class="btn btn-ghost" aria-label="닫기">
+            닫기
+          </button>
+        </header>
+        <div id="history-body" class="history-body"></div>
+      </div>
+    </dialog>
+
+    <!-- 카드 3: 실행 기록 (Do) 모달 — T6 / T6_todos 예상 시간은 절대 수정하지 않음 -->
+    <dialog id="execution-dialog" class="history-dialog">
+      <div class="dialog-inner">
+        <header class="dialog-header">
+          <h2 id="execution-title">실행 기록 작성</h2>
+          <button type="button" id="close-execution-btn" class="btn btn-ghost" aria-label="닫기">
+            닫기
+          </button>
+        </header>
+        <form id="execution-form" class="plan-form execution-form" novalidate>
+          <input type="hidden" id="execution-todo-id" value="" />
+          <p id="execution-todo-label" class="selected-plan-label"></p>
+          <p class="exec-note">
+            이 기록은 할 일·계획의 예상 시간과 분리되어 저장됩니다. (원본 예상 시간은 덮어쓰지 않습니다)
+          </p>
+
+          <div class="field-row">
+            <label class="field">
+              <span>시작 시각</span>
+              <input type="datetime-local" id="exec-start-time" required />
+            </label>
+            <label class="field">
+              <span>끝난 시각</span>
+              <input type="datetime-local" id="exec-end-time" required />
+            </label>
+          </div>
+
+          <label class="field">
+            <span>실제로 걸린 시간 (시간)</span>
+            <input
+              type="number"
+              id="exec-actual-duration"
+              required
+              min="0"
+              step="0.1"
+              placeholder="예: 1.5"
+            />
+          </label>
+
+          <label class="field">
+            <span>막혔던 이유</span>
+            <textarea
+              id="exec-blocker-reason"
+              required
+              rows="3"
+              maxlength="500"
+              placeholder="막힌 점이 없었다면 '없음'이라고 적어 주세요."
+            ></textarea>
+          </label>
+
+          <div class="form-actions">
+            <button type="submit" id="execution-submit-btn" class="btn btn-primary">
+              실행 기록 저장
+            </button>
+          </div>
+          <p id="execution-form-status" class="status-msg" aria-live="polite"></p>
+        </form>
+      </div>
+    </dialog>
+
+    <!--
+      Supabase CDN: 전역 객체 `supabase`에 createClient가 붙습니다.
+      URL / anon KEY는 js/config.js 에서 설정하세요.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="js/config.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>

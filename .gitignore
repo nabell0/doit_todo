@@ -1,0 +1,14 @@
+# 환경 변수 / 로컬 비밀 (service_role 등 절대 커밋 금지)
+.env
+.env.*
+!.env.example
+
+# 로컬 전용 설정 (필요 시)
+js/config.local.js
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

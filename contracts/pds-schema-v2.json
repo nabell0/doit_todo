@@ -1,0 +1,102 @@
+{
+  "name": "플랜두씨 다이어리 1 — PDS Schema v2",
+  "version": "2.0.0",
+  "description": "Plan(T6) → Do(T6_todos, T6_execution_records) → See(집계) 데이터 계약. 로그인은 V1에 없음(공개 anon).",
+  "timezone": {
+    "display_and_delay_rule": "Asia/Seoul (KST, UTC+9)",
+    "storage": "PostgreSQL timestamptz 는 UTC 로 저장. 클라이언트는 표시·지연 판정 시 KST 기준으로 변환/비교한다.",
+    "date_columns": "deadline 등 date 타입은 날짜만 저장(타임존 없음). 지연 판정은 KST 오늘(YYYY-MM-DD)과 문자열 비교.",
+    "duration_unit": "estimated_time / actual_duration / estimated_hours 는 모두 '시간(hours)' 단위로 통일."
+  },
+  "tables": [
+    {
+      "name": "T6",
+      "role": "계획(Plan) — 현재 유효한 계획 1행",
+      "primary_key": "id",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false, "default": "gen_random_uuid()", "notes": "PK" },
+        { "name": "title", "type": "text", "nullable": false, "notes": "계획명" },
+        { "name": "period", "type": "text", "nullable": false, "notes": "기간 예: 2026-10 ~ 2026-12" },
+        { "name": "priority", "type": "text", "nullable": false, "notes": "높음 | 중간 | 낮음" },
+        { "name": "success_criteria", "type": "text", "nullable": false, "notes": "성공 기준" },
+        { "name": "estimated_hours", "type": "numeric(8,2)", "nullable": false, "notes": "계획 예상 시간(시간)" },
+        { "name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()", "notes": "UTC 저장, 표시 시 KST" }
+      ]
+    },
+    {
+      "name": "T6_history",
+      "role": "계획 수정 이력 — 수정 직전 T6 스냅샷",
+      "primary_key": "id",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false, "default": "gen_random_uuid()", "notes": "PK" },
+        { "name": "plan_id", "type": "uuid", "nullable": false, "notes": "FK → T6.id" },
+        { "name": "previous_content", "type": "jsonb", "nullable": false, "notes": "수정 전 T6 전체 JSON" },
+        { "name": "changed_at", "type": "timestamptz", "nullable": false, "default": "now()", "notes": "수정 시각 UTC" }
+      ]
+    },
+    {
+      "name": "T6_todos",
+      "role": "할 일(Do) — 계획에 종속",
+      "primary_key": "id",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false, "default": "gen_random_uuid()", "notes": "PK" },
+        { "name": "plan_id", "type": "uuid", "nullable": false, "notes": "FK → T6.id" },
+        { "name": "content", "type": "text", "nullable": false, "notes": "할 일 내용 (XSS: textContent 렌더)" },
+        { "name": "deadline", "type": "date", "nullable": false, "notes": "마감일 YYYY-MM-DD" },
+        { "name": "priority", "type": "integer", "nullable": false, "notes": "1=높음, 2=중간, 3=낮음" },
+        { "name": "tags", "type": "text[]", "nullable": false, "default": "{}", "notes": "태그 배열" },
+        { "name": "estimated_time", "type": "numeric(8,2)", "nullable": false, "notes": "예상 시간(시간)" },
+        { "name": "is_completed", "type": "boolean", "nullable": false, "default": false, "notes": "완료 여부" },
+        { "name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()", "notes": "UTC 저장" }
+      ],
+      "sort_contract": "deadline ASC → priority ASC → created_at ASC (tie-breaker)"
+    },
+    {
+      "name": "T6_execution_records",
+      "role": "실제 실행 기록 — 할 일당 1건",
+      "primary_key": "id",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false, "default": "gen_random_uuid()", "notes": "PK" },
+        { "name": "todo_id", "type": "uuid", "nullable": false, "unique": true, "notes": "FK → T6_todos.id, UNIQUE(연타 중복 방지)" },
+        { "name": "start_time", "type": "timestamptz", "nullable": false, "notes": "시작 시각 UTC" },
+        { "name": "end_time", "type": "timestamptz", "nullable": false, "notes": "종료 시각 UTC, end_time >= start_time" },
+        { "name": "actual_duration", "type": "numeric(8,2)", "nullable": false, "notes": "실제 소요(시간). T6/T6_todos 예상 시간과 독립" },
+        { "name": "blocker_reason", "type": "text", "nullable": false, "notes": "막혔던 이유. See 막힘 수 집계에 사용" },
+        { "name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()", "notes": "UTC 저장" }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "T6_history.plan_id",
+      "to": "T6.id",
+      "cardinality": "N:1",
+      "on_delete": "CASCADE"
+    },
+    {
+      "from": "T6_todos.plan_id",
+      "to": "T6.id",
+      "cardinality": "N:1",
+      "on_delete": "CASCADE"
+    },
+    {
+      "from": "T6_execution_records.todo_id",
+      "to": "T6_todos.id",
+      "cardinality": "1:1 (UNIQUE todo_id)",
+      "on_delete": "CASCADE"
+    }
+  ],
+  "see_aggregates": {
+    "계획_수": "COUNT(T6_todos) for selected plan",
+    "완료_수": "COUNT where is_completed = true",
+    "지연_수": "is_completed = false AND deadline < KST today",
+    "막힘_수": "execution.blocker_reason non-empty",
+    "시간_차이": "SUM(actual_duration) - SUM(estimated_time) in hours; empty → 0"
+  },
+  "security_notes": {
+    "client_key": "anon public key only in browser (js/config.js)",
+    "forbidden_in_client_or_git": ["service_role key", "DB password", "JWT secret"],
+    "xss": "User-generated strings rendered via textContent / createTextNode, not raw HTML injection",
+    "rls": "V1 public policies for anon; Auth 도입 시 사용자 스코프로 교체"
+  }
+}
